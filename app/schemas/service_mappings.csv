@@ -1,0 +1,52 @@
+Synonym1,Synonym2,Synonym3,Synonym4,product_servicecode
+SNS,,,Amazon SNS,AmazonSNS
+Config,,,AWS Config,AWSConfig
+WAF,,,aws waf,awswaf
+Quicksight,quick sight,,Amazon QuickSight,AmazonQuickSight
+RDS,Database,,Amazon RDS,AmazonRDS
+SES,,,Amazon SES,AmazonSES
+System Manager,,,AWS Systems Manager,AWSSystemsManager
+ELB,Load Balancers,,AWS ELB,AWSELB
+Elasticsearch,Opensearch,ES,Amazon ES,AmazonES
+API Gateway,,,Amazon Api Gateway,AmazonApiGateway
+Cloudfront,cloud front,,Amazon CloudFront,AmazonCloudFront
+Q,,,Amazon Q,AmazonQ
+Code Whisperer,Codewhisperer,,Amazon CodeWhisperer,AmazonCodeWhisperer
+,Xray,,AWS XRay,AWSXRay
+Data Transfer,,,AWS DataTransfer,AWSDataTransfer
+Glue,,,AWS Glue,AWSGlue
+Glacier,,,Amazon S3 GlacierDeepArchive,AmazonS3GlacierDeepArchive
+EFS,Elastic File System,,Amazon EFS,AmazonEFS
+Athena,,,Amazon Athena,AmazonAthena
+MQ,Message Q,,Amazon MQ,AmazonMQ
+,,,transcribe,transcribe
+ElastiCache,,,Amazon ElastiCache,AmazonElastiCache
+Events,,,AWS Events,AWSEvents
+CW,Cloudwatch,,Amazon CloudWatch,AmazonCloudWatch
+Secrets Manager,,,AWS SecretsManager,AWSSecretsManager
+Dynamo,DynamoDB,,Amazon DynamoDB,AmazonDynamoDB
+Guard duty,guardduty,,Amazon GuardDuty,AmazonGuardDuty
+lambda,,,AWS Lambda,AWSLambda
+devops guru,,,Amazon DevOpsGuru,AmazonDevOpsGuru
+service catalog,,,AWS ServiceCatalog,AWSServiceCatalog
+location,,,Amazon LocationService,AmazonLocationService
+VPC,,,Amazon VPC,AmazonVPC
+Bedrock,,,,AmazonBedrock
+Kendra,,,Amazon Kendra,AmazonKendra
+Cognito,,,Amazon Cognito,AmazonCognito
+MigrationHub,,,AWS MigrationHubRefactorSpaces,AWSMigrationHubRefactorSpaces
+Sagemaker,sage maker,,Amazon SageMaker,AmazonSageMaker
+EKS,kubernetes,,Amazon EKS,AmazonEKS
+,,,comprehend,comprehend
+Textract,,,Amazon Textract,AmazonTextract
+cloudtrail,cloud trail,,AWS CloudTrail,AWSCloudTrail
+macie,,,Amazon Macie,AmazonMacie
+Queue service,,,AWS QueueService,AWSQueueService
+Billing Conductor,,,AWS BillingConductor,AWSBillingConductor
+Security Hub,,,AWS SecurityHub,AWSSecurityHub
+S3,Simple Storage Service,,Amazon S3,AmazonS3
+kms,,,aws kms,awskms
+EC2,EC2 instances,Compute,Amazon EC2,AmazonEC2
+R53,Route 53,DNS,Amazon Route53,AmazonRoute53
+Kinesis,,,Amazon Kinesis,AmazonKinesis
+FSx,,,Amazon FSx,AmazonFSx

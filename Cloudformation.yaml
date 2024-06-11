@@ -1,0 +1,555 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation for the data-insights-with-amazon-q-business setup'
+Parameters:
+  
+  LatestAmiId:
+    Description: EC2 machine image
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+  VpcId:
+    Description: ID of the existing VPC
+    Type: AWS::EC2::VPC::Id
+    ConstraintDescription: must be the ID of an existing VPC  
+  PublicSubnetIds:
+    Description: List of IDs of existing public subnets
+    Type: List<AWS::EC2::Subnet::Id>
+    ConstraintDescription: must be list of existing public subnet IDs  
+  CertificateARN:
+    Description: Certificate that needs to be added to the Load Balancer
+    Type: String
+  AuthName:
+    Type: String
+    Description: Unique Auth Name for Cognito Resources
+    AllowedPattern: ^[a-z0-9]+$
+    ConstraintDescription: May only include lowercase, alphanumeric characters
+  QApplicationId:
+    Type: String
+    Description: Q Application Id
+  IdcApplicationArn:
+    Type: String
+    Description: Identity Center customer application ARN.
+    Default: ""
+  AthenaDbName:
+    Type: String
+    Description: Athena Database name
+  AthenaS3Loc:
+    Type: String
+    Description: S3 location for Athena query results
+    Default: "s3://$bucket_name_for_athena/"
+  S3CodeLoc:
+    Type: String
+    Description: S3 Location for the code bundle
+    Default: "s3://$bucket_name_for_code/data-insights-with-amazon-q-business.zip"
+    
+Resources:
+  QManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowQChat
+          Effect: Allow
+          Action:
+          - "qbusiness:ChatSync"
+          Resource: !Sub "arn:${AWS::Partition}:qbusiness:${AWS::Region}:${AWS::AccountId}:application/${QApplicationId}"
+        
+  QServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS:
+            - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+          Action:
+          - sts:AssumeRole
+          - sts:SetContext
+          Condition:
+            ArnEquals:
+              "aws:PrincipalArn": !GetAtt EC2ServiceRole.Arn
+      Path: /
+      ManagedPolicyArns:
+      - !Ref QManagedPolicy
+  
+  EC2ServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole    
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  
+  EC2ServicePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      guard:
+        SuppressedRules:
+          - IAM_POLICYDOCUMENT_NO_WILDCARD_RESOURCE # CreateTokenWithIAM requires wildcard
+    #checkov:skip=CKV_AWS_111:CreateTokenWithIAM requires wildcard
+    Properties:
+      Roles:
+        - !Ref EC2ServiceRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: AllowAssumeQRole
+          Effect: Allow
+          Action:
+          - "sts:AssumeRole"
+          - "sts:SetContext"
+          Resource: !GetAtt QServiceRole.Arn
+        - Sid: AllowTokenExchange
+          Effect: Allow
+          Action:
+            - "sso-oauth:CreateTokenWithIAM"
+          Resource: "*" 
+        - Sid: AllowAppConfig
+          Effect: Allow
+          Action:
+            - "appconfig:StartConfigurationSession"
+            - "appconfig:GetLatestConfiguration"
+          Resource: 
+            - !Sub "arn:${AWS::Partition}:appconfig:${AWS::Region}:${AWS::AccountId}:application/${AppConfig}/environment/${AppConfigEnvironment}/configuration/${AppConfigConfigProfile}"
+        - Sid: AllowS3Access
+          Effect: Allow
+          Action:
+            - "s3:GetObject"
+            - "s3:ListBucket"
+            - "s3:PutObject"
+            - "s3:GetBucketLocation"
+            - "s3:ListBucket"
+            - "s3:ListBucketMultipartUploads"
+            - "s3:ListMultipartUploadParts"
+            - "s3:AbortMultipartUpload"
+
+          Resource:
+            - !Sub "arn:aws:s3:::*/*"
+            - !Sub "arn:aws:s3:::*"
+        - Sid: AllowAthenaAccess
+          Effect: Allow
+          Action:
+            - "athena:StartQueryExecution"
+            - "athena:GetQueryExecution"
+            - "athena:GetQueryResults"
+            - "athena:GetQueryResultsStream"
+            - "athena:CancelQueryExecution"
+          Resource: "*"
+        - Sid: AllowGlueAccess
+          Effect: Allow
+          Action:
+            - "glue:GetTable"
+            - "glue:GetDatabase"
+            - "glue:GetPartitions"
+          Resource: "*"
+  AppConfig:
+    Type: AWS::AppConfig::Application
+    Properties:
+      Name: data-insights-with-q-business
+  
+  AppConfigEnvironment:
+    Type: AWS::AppConfig::Environment
+    Properties:
+      ApplicationId: !Ref AppConfig
+      Name: data-insights-with-q-business-env
+  
+  AppConfigConfigProfile:
+    Type: AWS::AppConfig::ConfigurationProfile
+    Properties:
+      ApplicationId: !Ref AppConfig
+      Name: data-insights-with-q-business-config
+      LocationUri: "hosted"
+  
+  AppConfigConfigVersion:
+    Type: AWS::AppConfig::HostedConfigurationVersion
+    Properties:
+      ApplicationId: !Ref AppConfig
+      ConfigurationProfileId: !Ref AppConfigConfigProfile
+      ContentType: "application/json"
+      Content: !Sub |
+        {
+          "AmazonQAppId": "${QApplicationId}",
+          "IamRoleArn": "${QServiceRole.Arn}",
+          "Region": "${AWS::Region}",
+          "IdcApplicationArn": "${IdcApplicationArn}",
+          "OAuthConfig": {
+            "ClientId": "${UserPoolClient}",
+            "ExternalDns": "${LowerCaseFqdn.Output}",
+            "CognitoDomain" : "${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+          },
+          "AthenaDbName": "${AthenaDbName}",
+          "AthenaS3Loc": "${AthenaS3Loc}"
+        }
+  AppConfigDeployment:
+    Type: AWS::AppConfig::Deployment
+    Properties:
+      ApplicationId: !Ref AppConfig
+      ConfigurationProfileId: !Ref AppConfigConfigProfile
+      ConfigurationVersion: !GetAtt AppConfigConfigVersion.VersionNumber
+      EnvironmentId: !Ref AppConfigEnvironment
+      DeploymentStrategyId: !Ref AppConfigDeploymentStrategy
+  
+  AppConfigDeploymentStrategy:
+    Type: AWS::AppConfig::DeploymentStrategy
+    Properties:
+      DeploymentDurationInMinutes: 0
+      FinalBakeTimeInMinutes: 0
+      GrowthFactor: 100
+      Name: "Quick deployment"
+      ReplicateTo: "NONE"
+      GrowthType: "LINEAR"
+  # EC2 and ALB Security Groups
+  ELBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      guard:
+        SuppressedRules:
+        - EC2_SECURITY_GROUP_INGRESS_OPEN_TO_WORLD_RULE # This SG only applies to Internet facing ALB
+        - SECURITY_GROUP_INGRESS_CIDR_NON_32_RULE
+        - SECURITY_GROUP_MISSING_EGRESS_RULE
+    #checkov:skip=CKV_AWS_260:This SG only applies to Internet facing ALB
+    Properties:
+      GroupDescription: ELB Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS from Internet
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from Internet
+
+  ELBSecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow outbound traffic to EC2 Instance
+      GroupId: !Ref ELBSecurityGroup
+      IpProtocol: "tcp"
+      FromPort: 8080
+      ToPort: 8080
+      DestinationSecurityGroupId: !Ref SecurityGroup
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      guard:
+        SuppressedRules:
+        - SECURITY_GROUP_MISSING_EGRESS_RULE
+    Properties:
+      GroupDescription: EC2 Security group
+      VpcId: !Ref VpcId  
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 8080
+        ToPort: 8080
+        SourceSecurityGroupId: !Ref ELBSecurityGroup
+        Description: Allow inbound traffic from ALB
+
+  SecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      guard:
+        SuppressedRules:
+        - EC2_SECURITY_GROUP_EGRESS_OPEN_TO_WORLD_RULE
+        - SECURITY_GROUP_EGRESS_ALL_PROTOCOLS_RULE
+    Properties:
+      Description: Allow all outbound traffic
+      GroupId: !Ref SecurityGroup
+      IpProtocol: "-1"
+      CidrIp: 0.0.0.0/0
+
+  
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+      - !Ref EC2ServiceRole
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MaxSize: 1
+      MinSize: 1
+      DesiredCapacity: 1
+      TargetGroupARNs:
+        - !Ref EC2TargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 180
+      VPCZoneIdentifier: !Ref PublicSubnetIds
+
+      LaunchTemplate:
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+        LaunchTemplateId: !Ref LaunchTemplate
+      Tags:
+        - Key: Name
+          Value: Q Data Insights UI
+          PropagateAtLaunch: true
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    #checkov:skip=CKV_AWS_79: Ensure Instance Metadata Service Version 1 is not enabled - Not required for the demo
+    Properties:
+      LaunchTemplateData:
+        EbsOptimized: true
+        ImageId: !Ref 'LatestAmiId'
+        InstanceType: t3.micro
+        IamInstanceProfile:
+          Arn: !GetAtt EC2InstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            max_attempts=5
+            attempt_num=1
+            success=false
+            while [ $success = false ] && [ $attempt_num -le $max_attempts ]; do
+              echo "Trying dnf install"
+              dnf -y install python3.11 python3.11-pip git
+              # Check the exit code of the command
+              if [ $? -eq 0 ]; then
+                echo "Yum install succeeded"
+                success=true
+              else
+                echo "Attempt $attempt_num failed. Sleeping for 3 seconds and trying again..."
+                sleep 3
+                ((attempt_num++))
+              fi
+            done
+            max_attempts=5
+            attempt_num=1
+            success=false
+            while [ $success = false ] && [ $attempt_num -le $max_attempts ]; do
+              echo "Trying dnf install"
+              dnf -y install https://s3.amazonaws.com/aws-appconfig-downloads/aws-appconfig-agent/linux/x86_64/latest/aws-appconfig-agent.rpm
+              # Check the exit code of the command
+              if [ $? -eq 0 ]; then
+                echo "Yum install succeeded"
+                success=true
+              else
+                echo "Attempt $attempt_num failed. Sleeping for 3 seconds and trying again..."
+                sleep 3
+                ((attempt_num++))
+              fi
+            done
+            mkdir /etc/systemd/system/aws-appconfig-agent.service.d
+            echo "[Service]" > /etc/systemd/system/aws-appconfig-agent.service.d/overrides.conf 
+            echo "Environment=SERVICE_REGION=${AWS::Region}" >> /etc/systemd/system/aws-appconfig-agent.service.d/overrides.conf
+            systemctl daemon-reload
+            systemctl enable aws-appconfig-agent
+            systemctl restart aws-appconfig-agent
+            cd /opt
+            filename=$(basename ${S3CodeLoc})
+            aws s3 cp ${S3CodeLoc} .
+            unzip "$filename"
+            unzipped_folder=$(basename "$filename" .zip)
+            cd "$unzipped_folder"
+            pip3.11 install virtualenv
+            python3.11 -m virtualenv venv
+            venv/bin/pip install -r setup/Requirements.txt
+            APPCONFIG_APP_NAME=${AppConfig} APPCONFIG_ENV_NAME=${AppConfigEnvironment} APPCONFIG_CONF_NAME=${AppConfigConfigProfile} nohup venv/bin/streamlit run app/qb_chat.py --server.port=8080 > logs.txt & 
+
+    # Target Group, Listener and Application  Load Balancer
+  EC2TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 15
+      HealthyThresholdCount: 5
+      Matcher:
+        HttpCode: '200'
+      Name: QDataInsightsEC2TargetGroup
+      Port: 8080
+      Protocol: HTTP
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: '20'
+      UnhealthyThresholdCount: 3
+      VpcId: !Ref VpcId
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Metadata:
+      guard:
+        SuppressedRules:
+          - COGNITO_USER_POOL_MFA_CONFIGURATION_RULE # Not required for the demo
+    Properties:
+      UserPoolName: !Sub ${AuthName}-user-pool
+      AutoVerifiedAttributes:
+      - email
+      Schema:
+      - Name: email
+        AttributeDataType: String
+        Mutable: false
+        Required: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub ${AuthName}-client
+      GenerateSecret: false
+      UserPoolId: !Ref UserPool
+      AllowedOAuthFlowsUserPoolClient: True
+      AllowedOAuthFlows:
+      - code
+      AllowedOAuthScopes:
+      - openid
+      SupportedIdentityProviders:
+      - COGNITO
+      CallbackURLs:
+      - !Sub "https://${LowerCaseFqdn.Output}/component/streamlit_oauth.authorize_button/index.html"
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Sub ${AuthName}-dns-testname
+
+  ALBListener2:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Metadata:
+      guard:
+        SuppressedRules:
+        - ELBV2_ACM_CERTIFICATE_REQUIRED # Certificate is loaded externally for the demo
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+      - CertificateArn: !Ref CertificateARN
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref EC2TargetGroup
+        Order: 1
+  
+  ALBListener80:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Metadata:
+      guard:
+        SuppressedRules:
+        - ELBV2_LISTENER_PROTOCOL_RULE # Not required for the demo
+        - ELBV2_LISTENER_SSL_POLICY_RULE # NO SSL Policy for an HTTP listener
+    #checkov:skip=CKV_AWS_91: Ensure the ELBv2 (Application/Network) has access logging enabled - Not required for the demo
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Order: 1
+          RedirectConfig: 
+            Protocol: "HTTPS"
+            Port: "443"
+            Host: "#{host}"
+            Path: "/#{path}"
+            Query: "#{query}"
+            StatusCode: "HTTP_301"
+          Type: "redirect"
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Metadata:
+      guard:
+        SuppressedRules:
+        - ELB_DELETION_PROTECTION_ENABLED # Not required for the demo
+        - ELBV2_ACCESS_LOGGING_RULE # Not required for the demo
+    #checkov:skip=CKV_AWS_79: Ensure Instance Metadata Service Version 1 is not enabled - Not required for the demo
+    Properties:
+      LoadBalancerAttributes:
+        - Key: routing.http.drop_invalid_header_fields.enabled
+          Value: true
+      Scheme: internet-facing
+      Subnets:
+      - !Select [0, !Ref PublicSubnetIds]
+      - !Select [1, !Ref PublicSubnetIds]
+      SecurityGroups:
+      - !Ref ELBSecurityGroup
+  
+  LowerCaseFqdn:
+    Type: Custom::LowerCaseFqdn
+    Properties:
+      ServiceToken: !GetAtt LowerCaseFunction.Arn
+      Input: !GetAtt ApplicationLoadBalancer.DNSName
+
+  LowerCaseFunction:
+    Type: AWS::Lambda::Function
+    Metadata:
+      guard:
+        SuppressedRules:
+        - LAMBDA_DLQ_CHECK # This a synchronous call no need for DLQ
+        - LAMBDA_INSIDE_VPC # No need for VPC
+        - LAMBDA_CONCURRENCY_CHECK # Not required for the demo
+    #checkov:skip=CKV_AWS_115: Concurrency check Not required for the demo
+    #checkov:skip=CKV_AWS_116: This a synchronous call no need for DLQ
+    #checkov:skip=CKV_AWS_117: No need for VPC the demo
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LowerCaseRole.Arn
+      Code:
+        ZipFile: |
+          import cfnresponse
+          def error_handler(func):
+            def wrapper(*args, **kwargs):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    logger.error(e)
+                    cfnresponse.send(args[0], args[1], cfnresponse.FAILED, {})
+                    return None
+            return wrapper
+
+          @error_handler
+          def handler(event, context):
+            if event["RequestType"] in ["Create", "Update"]:
+              response = {}
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {"Output": event['ResourceProperties']['Input'].lower()})
+            if event["RequestType"] == "Delete":
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+      Runtime: python3.12
+      Timeout: 60
+  
+  LowerCaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+Outputs:
+  URL:
+    Description: URL to access the Streamlit APP
+    Value:
+      !Sub https://${ApplicationLoadBalancer.DNSName}
+  TrustedIssuerUrl:
+    Description: Endpoint of the trusted issuer to setup Identity Center
+    Value: !GetAtt UserPool.ProviderURL
+  Audience:
+    Description: Audience to setup customer application in Identity Center
+    Value: !Ref UserPoolClient
+  RoleArn:
+    Description: "ARN of the IAM role required to setup token exchange in Identity Center"
+    Value: !GetAtt EC2ServiceRole.Arn
